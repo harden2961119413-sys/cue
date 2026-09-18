@@ -219,7 +219,19 @@
         <label class="s-label">Your resume <span class="s-hint">paste full resume, or import a PDF/DOCX</span></label>
         <div class="s-field s-upload"><span class="s-filename" id="resume-filename"></span><button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button></div>
         <textarea id="resume-text" rows="7" spellcheck="false" placeholder="Paste your full resume here. cue will extract Name, Summary, Experience, Skills, Projects, and Education automatically."></textarea>
+        <label class="s-label">
+          Project knowledge
+          <span class="s-hint">
+            optional — add project details, architecture, technologies, responsibilities, and achievements
+          </span>
+        </label>
 
+        <textarea
+          id="project-knowledge"
+          rows="6"
+          spellcheck="false"
+          placeholder="Paste useful project knowledge here. For example: project architecture, tech stack, your responsibilities, technical decisions, challenges, metrics, and achievements."
+        ></textarea>
         <label class="s-label">Target job description <span class="s-hint">optional — every answer gets tailored to this role</span></label>
         <div class="s-field s-upload"><span class="s-filename" id="jd-filename"></span><button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button></div>
         <textarea id="job-description" rows="5" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for. cue will highlight your most relevant experience."></textarea>

@@ -1,90 +1,57 @@
 // interview-context.js
-// Builds context-aware, category-specific system prompt blocks for every
-// direction an interview can take. Reads the live transcript to detect which
-// category is in play and injects only the fields that are relevant.
+// 面向中文技术面试的上下文路由：识别题型，并只注入当前问题需要的资料。
 
-// ── Question category detection ───────────────────────────────────────────────
 const CATEGORY_PATTERNS = {
+  project: [
+    /项目.*(架构|难点|职责|技术选型|为什么|怎么做|怎么实现|性能|优化|故障|压测|qps|延迟|一致性|高可用|扩容|复盘)/i,
+    /(介绍|讲讲|说说|展开|深挖).{0,12}(项目|系统|服务|平台)/i,
+    /(你|您).{0,8}(项目|简历).{0,20}(怎么|为什么|如何|负责|做了什么)/i,
+    /tell me more about (the|your) project/i,
+    /walk me through (the|your) project/i,
+    /why did you (choose|use)/i,
+  ],
   behavioral: [
+    /讲一个.*(经历|例子|故事)/i, /有没有.*(经历|例子)/i, /遇到过.*(冲突|失败|压力|困难|挑战)/i,
+    /你是怎么.*(处理|推动|协调|解决)/i, /最大的(挑战|失败|成就|收获)/i,
     /tell me about a time/i, /give me an example/i, /describe a situation/i,
-    /when you (had|have|faced|dealt|worked|led|managed|failed|struggled)/i,
-    /biggest (challenge|achievement|failure|mistake|success)/i,
-    /how did you handle/i, /walk me through a time/i, /have you ever/i,
-    /conflict with/i, /difficult (coworker|colleague|manager|teammate)/i,
-    /under pressure/i, /tight deadline/i, /disagree(d)? with/i,
-    /took initiative/i, /learned (quickly|fast|new)/i, /gave feedback/i,
-    /leadership (without|experience)/i, /proud of/i,
-    /most (challenging|difficult|proud|rewarding)/i,
-    /example of (when|a time|how)/i,
-    /situation (where|when|in which)/i,
+    /how did you handle/i, /have you ever/i, /under pressure/i, /tight deadline/i,
   ],
   motivation: [
+    /为什么(想来|选择|投|考虑).*(公司|岗位|我们)/i, /为什么离职/i, /职业规划/i,
+    /为什么要招你/i, /你的优势/i, /你的缺点/i, /五年.*规划/i,
     /why (do you want|are you interested|this company|this role|us|here)/i,
-    /why (are you leaving|did you leave|move on)/i,
-    /what (attracted|draws|interests|excites|appeals) (you|to)/i,
-    /where do you see yourself/i, /5 years/i, /career goals/i,
-    /ideal (role|company|environment|manager|team)/i,
-    /what (kind of|type of) (work|manager|team)/i,
-    /motivates you/i, /passionate about/i,
-    /why (are you|looking for) (a new|new|this)/i,
-    /why should we hire/i,
-    /what (do you|would you) bring/i,
-    /long.term (goal|plan|career)/i,
-    /looking for (in|from) (your next|a new|this)/i,
-    /new opportunity/i,
+    /why should we hire/i, /career goals/i,
   ],
   situational: [
+    /如果.*你会怎么/i, /假设.*怎么/i, /线上.*(故障|事故|宕机).*怎么/i,
+    /怎么做技术选型/i, /怎么排查/i, /如何权衡/i, /如何推进/i,
     /what would you do if/i, /how would you (handle|approach|deal with)/i,
-    /imagine you/i, /hypothetically/i, /if you (joined|started|were)/i,
-    /how would you prioritize/i, /production (outage|incident|down)/i,
-    /codebase (is a mess|legacy|technical debt)/i,
-    /disagree with (your manager|a decision)/i,
-    /walked into/i, /first (30|60|90) days/i,
+    /production (outage|incident|down)/i,
   ],
   experience: [
-    /tell me about your (experience|background|role|work|time) (at|in|with|on)/i,
-    /walk me through your (resume|background|experience|role|career|most recent)/i,
-    /walk me through (your|the) (role|position|work|project)/i,
+    /自我介绍/i, /介绍一下自己/i, /讲讲你的经历/i, /最近一段工作/i, /主要负责什么/i,
+    /技术栈/i, /日常工作/i, /简历/i,
+    /tell me about yourself/i, /walk me through your (resume|background|experience|role|career)/i,
     /what (were you responsible|did you do|was your role)/i,
-    /biggest (project|achievement) (at|there|in your)/i,
-    /tech stack/i, /day.to.day/i, /what did you build/i,
-    /tell me more about/i, /elaborate on/i,
-    /tell me about yourself/i,
-    /tell me about your (current|previous|last|recent) (role|job|position|company)/i,
-    /tell me about your time at/i,
-    /what have you been working on/i,
-    /walk me through what you('ve)? (done|built|worked on)/i,
-    /can you (elaborate|expand) on/i,
-    /your (most recent|last|current|previous) (role|job|position)/i,
   ],
   compensation: [
-    /salary (expectation|requirement|range)/i, /compensation/i,
-    /how much (are you|do you) (making|expect|want)/i,
-    /when can you start/i, /notice period/i, /start date/i,
-    /other (offer|interview|option)/i, /interviewing elsewhere/i,
-    /do you have (any )?questions/i, /questions for us/i, /questions for me/i,
-    /anything (you'?d? like to|you want to) ask/i,
-    /we have (a few minutes|some time) (left|for questions)/i,
+    /薪资/i, /期望薪资/i, /多久(能|可以)入职/i, /到岗/i, /offer/i, /还有什么问题/i, /反问/i,
+    /salary/i, /compensation/i, /notice period/i, /start date/i, /questions for (us|me)/i,
   ],
   technical: [
-    /system design/i, /design (a|an|the) (system|service|api|database|url|feed|chat|cache|queue)/i,
-    /explain (how|what|why|the difference|the concept)/i,
-    /tradeoff/i, /trade.off/i,
-    /sql vs nosql/i, /difference between/i,
-    /what is .{2,40}\?/i,
-    /how does .{2,40} work/i,
-    /how would you design/i,
-    /complexity/i, /algorithm/i, /data structure/i,
-    /scale (this|to|it|a)/i, /architecture/i,
-    /when (would you use|should you use|to use)/i,
-    /pros and cons/i, /advantages (of|and disadvantages)/i,
-    /implement (a|an|the)/i, /how (is|are|do|does|would)/i,
+    /什么是/i, /说一下/i, /讲一下/i, /原理/i, /底层/i, /区别/i, /对比/i, /优缺点/i,
+    /jvm/i, /gc/i, /jmm/i, /hashmap/i, /线程池/i, /spring/i, /事务/i,
+    /mysql/i, /redis/i, /mq/i, /kafka/i, /rocketmq/i, /rpc/i, /微服务/i, /分布式/i,
+    /goroutine/i, /channel/i, /\bgmp\b/i, /context/i, /逃逸分析/i, /pprof/i,
+    /\brag\b/i, /react/i, /function calling/i, /tool calling/i, /\bmcp\b/i, /\ba2a\b/i,
+    /agent/i, /workflow/i, /memory/i, /embedding/i, /rerank/i, /langgraph/i, /harness/i,
+    /system design/i, /design (a|an|the)/i, /difference between/i, /how does .* work/i,
+    /algorithm/i, /complexity/i, /data structure/i, /architecture/i, /trade.?off/i,
   ],
 };
 
 function detectCategory(transcript) {
   if (!transcript || !transcript.length) return 'general';
-  // Look at the last 5 "Them" turns — the interviewer's recent questions
   const recentThem = transcript
     .filter(t => t.channel === 'them')
     .slice(-5)
@@ -98,14 +65,13 @@ function detectCategory(transcript) {
   return 'general';
 }
 
-// ── Resume parser (carried over from resume-context.js) ───────────────────────
 const SECTION_PATTERNS = [
   { key: 'name',       re: null, label: null },
-  { key: 'summary',    re: /(?:summary|objective|profile|about)[^\n]*\n([\s\S]{20,400}?)(?=\n[A-Z]|\n\n[A-Z]|$)/i,      label: 'Summary' },
-  { key: 'experience', re: /(?:experience|work history|employment)[^\n]*\n([\s\S]{20,1800}?)(?=\n(?:education|skills|projects|certif|awards|$))/i, label: 'Experience' },
-  { key: 'skills',     re: /(?:skills?|technical skills?|competencies|tech stack)[^\n]*\n([\s\S]{10,600}?)(?=\n(?:experience|education|projects|certif|awards|work|$))/i, label: 'Skills' },
-  { key: 'education',  re: /(?:education|academic)[^\n]*\n([\s\S]{10,400}?)(?=\n(?:experience|skills|projects|certif|awards|work|$))/i, label: 'Education' },
-  { key: 'projects',   re: /(?:projects?|portfolio)[^\n]*\n([\s\S]{10,800}?)(?=\n(?:experience|education|skills|certif|awards|work|$))/i, label: 'Projects' },
+  { key: 'summary',    re: /(?:summary|objective|profile|about|个人总结|个人简介|简介)[^\n]*\n([\s\S]{20,500}?)(?=\n[A-Z\u4e00-\u9fa5]|\n\n[A-Z\u4e00-\u9fa5]|$)/i, label: '个人简介' },
+  { key: 'experience', re: /(?:experience|work history|employment|工作经历|实习经历)[^\n]*\n([\s\S]{20,2200}?)(?=\n(?:education|skills|projects|certif|awards|教育|技能|项目|证书|荣誉|$))/i, label: '工作经历' },
+  { key: 'skills',     re: /(?:skills?|technical skills?|competencies|tech stack|技能|专业技能|技术栈)[^\n]*\n([\s\S]{10,800}?)(?=\n(?:experience|education|projects|certif|awards|work|工作|教育|项目|证书|$))/i, label: '技能' },
+  { key: 'education',  re: /(?:education|academic|教育经历|教育背景)[^\n]*\n([\s\S]{10,500}?)(?=\n(?:experience|skills|projects|certif|awards|work|工作|技能|项目|证书|$))/i, label: '教育经历' },
+  { key: 'projects',   re: /(?:projects?|portfolio|项目经历|项目)[^\n]*\n([\s\S]{10,1400}?)(?=\n(?:experience|education|skills|certif|awards|work|工作|教育|技能|证书|$))/i, label: '项目经历' },
 ];
 
 function parseResume(text) {
@@ -128,9 +94,7 @@ function clip(text, limit) {
   return text.slice(0, limit).trimEnd() + '…';
 }
 
-// ── Context builders by category ──────────────────────────────────────────────
-
-function buildResumeBlock(resumeText, limit = 2400) {
+function buildResumeBlock(resumeText, limit = 2600) {
   if (!resumeText || !resumeText.trim()) return '';
   const parsed = parseResume(resumeText);
   if (!parsed) return '';
@@ -144,34 +108,28 @@ function buildResumeBlock(resumeText, limit = 2400) {
       if (!val) continue;
       const sp = SECTION_PATTERNS.find(s => s.key === key);
       const label = sp && sp.label;
-      const chunk = label ? `${label}:\n${clip(val, Math.min(rem - label.length - 2, 800))}` : clip(val, 80);
-      parts.push(chunk);
-      rem -= chunk.length;
+      const chunk = label ? `${label}：\n${clip(val, Math.min(Math.max(rem - label.length - 2, 0), 1000))}` : clip(val, 80);
+      if (chunk) {
+        parts.push(chunk);
+        rem -= chunk.length;
+      }
     }
     return parts.join('\n\n');
   }
   return clip(parsed.raw, limit);
 }
 
-function buildJDBlock(jd, limit = 600) {
+function buildJDBlock(jd, limit = 800) {
   if (!jd || !jd.trim()) return '';
-  return 'Target Role / Job Description:\n' + clip(jd.trim().replace(/\s+/g, ' '), limit);
+  return '=== 目标岗位 / JD ===\n' + clip(jd.trim().replace(/\s+/g, ' '), limit);
 }
 
-// ── Main export ───────────────────────────────────────────────────────────────
-
-/**
- * buildInterviewContext(settings, mode, transcript)
- * Returns a system-prompt string with only the context fields relevant to
- * the detected interview category. Returns null for leetcode mode.
- */
 function buildInterviewContext(settings, mode, transcript) {
-  // Coding problems never need personal context
   if (mode === 'leetcode') return null;
 
   const category = detectCategory(transcript || []);
-
   const resume    = settings.resumeText || '';
+  const project   = settings.projectKnowledge || '';
   const jd        = settings.jobDescription || '';
   const stories   = settings.starStories || '';
   const whyCo     = settings.whyCompany || '';
@@ -180,103 +138,109 @@ function buildInterviewContext(settings, mode, transcript) {
   const salary    = settings.salaryTarget || '';
   const questions = settings.questionsToAsk || '';
 
-  const hasResume  = resume.trim().length > 0;
+  const hasResume = resume.trim().length > 0;
+  const hasProject = project.trim().length > 0;
   const hasStories = stories.trim().length > 0;
-  const hasJD      = jd.trim().length > 0;
-
+  const hasJD = jd.trim().length > 0;
   const blocks = [];
 
-  // Always include resume if available (but size varies by category)
+  // 项目深挖时项目知识文档拥有最高事实优先级。
+  if (category === 'project' && hasProject) {
+    blocks.push(
+      '=== 项目知识文档（项目深挖最高优先级事实源） ===\n' +
+      clip(project.trim(), 5000) +
+      '\n\n规则：只能把这里明确写出的内容当作候选人的真实项目事实。不要擅自补数字、组件、职责或故障。'
+    );
+  }
+
   if (hasResume) {
-    const resumeLimit = (category === 'behavioral' || category === 'experience') ? 2400 : 1400;
+    const resumeLimit = ['behavioral', 'experience', 'project'].includes(category) ? 2800 : 1600;
     const rb = buildResumeBlock(resume, resumeLimit);
-    if (rb) blocks.push('=== Your Background ===\n' + rb);
+    if (rb) blocks.push('=== 候选人简历 ===\n' + rb);
   }
 
-  // Job description — always include when available
-  if (hasJD) {
-    blocks.push(buildJDBlock(jd, category === 'technical' ? 300 : 600));
+  // 非项目类问题也允许带一小段项目知识，方便八股追问落到真实项目。
+  if (category !== 'project' && hasProject && ['technical', 'situational', 'general'].includes(category)) {
+    blocks.push('=== 可用于技术追问的项目事实摘要 ===\n' + clip(project.trim(), category === 'technical' ? 1800 : 1200));
   }
 
-  // Category-specific injections
+  if (hasJD) blocks.push(buildJDBlock(jd, category === 'technical' ? 500 : 800));
+
   switch (category) {
+    case 'project':
+      if (!hasProject) {
+        blocks.push(
+          '（未提供独立项目知识文档。项目深挖时只能依据简历和已有 STAR 信息回答；缺失的项目事实不得编造。）'
+        );
+      }
+      if (hasStories) blocks.push('=== 与项目相关的 STAR/亮点 ===\n' + clip(stories.trim(), 1000));
+      break;
 
     case 'behavioral':
       if (hasStories) {
         blocks.push(
-          '=== Your STAR Stories (use these for behavioral questions) ===\n' +
-          clip(stories.trim(), 2000) + '\n' +
-          'IMPORTANT: When answering behavioral questions, use these real stories. ' +
-          'Structure your answer: Situation → Task → Action → Result. ' +
-          'Be specific, use numbers/metrics when available, keep it under 2 minutes spoken.'
+          '=== STAR 故事 ===\n' + clip(stories.trim(), 2200) +
+          '\n回答行为题时优先复用真实故事：背景 -> 任务 -> 我的行动 -> 结果/复盘。'
         );
       } else {
-        blocks.push(
-          '(No STAR stories provided — construct a plausible story from the candidate\'s experience above. ' +
-          'Be specific and grounded, avoid generic statements.)'
-        );
+        blocks.push('（未提供 STAR 故事。只能基于简历/项目事实组织回答，不要虚构经历。）');
       }
-      if (workStyle) blocks.push('Work Style / Values:\n' + clip(workStyle, 400));
+      if (workStyle) blocks.push('=== 工作方式 / 价值观 ===\n' + clip(workStyle, 500));
       break;
 
     case 'motivation':
-      if (whyCo)    blocks.push('Why This Company:\n' + clip(whyCo, 500));
-      if (whyLeave) blocks.push('Why Leaving Current Role:\n' + clip(whyLeave, 300));
-      if (workStyle) blocks.push('Ideal Work Environment / Values:\n' + clip(workStyle, 400));
+      if (whyCo) blocks.push('=== 为什么这家公司 / 岗位 ===\n' + clip(whyCo, 600));
+      if (whyLeave) blocks.push('=== 离职原因 ===\n' + clip(whyLeave, 400));
+      if (workStyle) blocks.push('=== 工作偏好 ===\n' + clip(workStyle, 400));
       break;
 
     case 'situational':
-      if (workStyle) blocks.push('Decision-Making Style / Values:\n' + clip(workStyle, 500));
-      if (hasStories) blocks.push('Relevant Past Experience:\n' + clip(stories, 800));
-      break;
-
-    case 'experience':
-      // Already have full resume — no extra blocks needed
-      if (hasStories) blocks.push('Key Stories / Highlights:\n' + clip(stories, 1000));
+      if (workStyle) blocks.push('=== 决策与协作风格 ===\n' + clip(workStyle, 600));
+      if (hasStories) blocks.push('=== 可参考的历史经历 ===\n' + clip(stories, 900));
       break;
 
     case 'compensation':
-      if (salary)    blocks.push('Salary Target:\n' + salary);
-      if (questions) blocks.push('Questions to Ask Interviewer:\n' + clip(questions, 600));
+      if (salary) blocks.push('=== 薪资期望 ===\n' + salary);
+      if (questions) blocks.push('=== 准备好的反问 ===\n' + clip(questions, 800));
       break;
 
     case 'technical':
-      // Resume skills section is most relevant here — already included above
+      blocks.push(
+        '=== 技术面试回答要求 ===\n' +
+        '优先用中文按“结论 -> 原理 -> 关键细节/边界 -> 场景与取舍 -> 如有材料则结合真实项目”回答。' +
+        'Agent/Java/Go/后端问题如果存在多种实现，要说明为什么选某一种。'
+      );
       break;
 
-    case 'general':
     default:
-      if (hasStories) blocks.push('Key Experience Highlights:\n' + clip(stories, 600));
-      if (workStyle)  blocks.push('Work Style:\n' + clip(workStyle, 300));
+      if (hasStories) blocks.push('=== 关键经历亮点 ===\n' + clip(stories, 700));
+      if (workStyle) blocks.push('=== 工作方式 ===\n' + clip(workStyle, 350));
       break;
   }
 
   if (!blocks.length) return null;
 
   const tailorNote = hasJD
-    ? '\nTailor every answer to highlight fit with the target role above.'
+    ? '\n\n所有回答都应优先突出与目标岗位最相关的能力，但不得为了匹配 JD 而虚构经历。'
     : '';
 
   return blocks.join('\n\n') + tailorNote;
 }
 
-// ── Legacy compat ─────────────────────────────────────────────────────────────
 function buildResumeContext(resumeText, jobDescription, mode) {
   if (!resumeText || !String(resumeText).trim()) return null;
   if (typeof jobDescription === 'number') {
     const cleaned = String(resumeText).trim().replace(/\s+/g, ' ');
     const limit = jobDescription || 1200;
     const clipped = cleaned.length > limit ? cleaned.slice(0, limit).trimEnd() + '…' : cleaned;
-    return ['Candidate resume context:', clipped, 'Use this resume information when answering questions about the candidate.'].join('\n');
+    return ['候选人简历参考：', clipped, '回答候选人背景相关问题时，以这份简历为事实依据。'].join('\n');
   }
-  // Lightweight: no transcript available, just wrap resume+JD
-  const rb = buildResumeBlock(resumeText, 1800);
-  const jb = buildJDBlock(jobDescription || '', 600);
+  const rb = buildResumeBlock(resumeText, 2000);
+  const jb = buildJDBlock(jobDescription || '', 700);
   const parts = [];
-  if (rb) parts.push('=== Your Background ===\n' + rb);
+  if (rb) parts.push('=== 候选人简历 ===\n' + rb);
   if (jb) parts.push(jb);
-  if (!parts.length) return null;
-  return parts.join('\n\n');
+  return parts.length ? parts.join('\n\n') : null;
 }
 
 module.exports = { buildInterviewContext, buildResumeContext, detectCategory, parseResume };

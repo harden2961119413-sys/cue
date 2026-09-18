@@ -1,26 +1,152 @@
+const fs = require('fs');
 const path = require('path');
 const { Arch } = require('builder-util');
-const { prepareWhisperRuntime } = require('./prepare-whisper-runtime');
+const {
+  prepareWhisperRuntime
+} = require('./prepare-whisper-runtime');
 
-/** Add the matching native runtime after Electron has assembled each target.
- *
- * Opt-in via CUE_BUNDLE_WHISPER=1. Preparing the runtime downloads a pinned
- * release on Windows/Linux and builds whisper.cpp from source with cmake on
- * macOS, so leaving it on by default would make every `npm run pack` and every
- * release build depend on the network and on a local toolchain — including the
- * signed macOS release, which has nothing to do with local transcription.
- * Local whisper is one optional speech-to-text provider among several; the app
- * runs fine without the bundled runtime and simply does not offer it.
- */
-module.exports = async function afterPack(context) {
-  if (!process.env.CUE_BUNDLE_WHISPER) {
-    console.log('[cue] Skipping the bundled whisper runtime (set CUE_BUNDLE_WHISPER=1 to include it).');
+const PROJECT_ROOT =
+  path.resolve(__dirname, '..');
+
+async function bundlePreparedWindowsRuntime(
+  context,
+  architecture
+) {
+  if (architecture !== 'x64') {
+    throw new Error(
+      'Static Windows Whisper runtime ' +
+      `is only prepared for x64, received ${architecture}.`
+    );
+  }
+
+  const sourceDirectory = path.join(
+    PROJECT_ROOT,
+    '.cache',
+    'whisper-runtime',
+    'win32-x64'
+  );
+
+  const executablePath = path.join(
+    sourceDirectory,
+    'whisper-server.exe'
+  );
+
+  const manifestPath = path.join(
+    sourceDirectory,
+    'runtime.json'
+  );
+
+  let manifest;
+
+  try {
+    manifest = JSON.parse(
+      await fs.promises.readFile(
+        manifestPath,
+        'utf8'
+      )
+    );
+  } catch {
+    throw new Error(
+      'Prepared static Windows Whisper runtime ' +
+      'is missing. Run `npm run prepare:whisper` ' +
+      'before packaging.'
+    );
+  }
+
+  if (
+    manifest.target !== 'win32-x64' ||
+    manifest.backend !== 'cpu-static' ||
+    manifest.dynamicBackends !== false ||
+    !fs.existsSync(executablePath)
+  ) {
+    throw new Error(
+      'The cached Windows Whisper runtime is not ' +
+      'the verified cue static CPU runtime. ' +
+      'Re-run `npm run prepare:whisper`.'
+    );
+  }
+
+  const destinationDirectory =
+    path.join(
+      context.appOutDir,
+      'resources',
+      'whisper-runtime'
+    );
+
+  await fs.promises.rm(
+    destinationDirectory,
+    {
+      recursive: true,
+      force: true
+    }
+  );
+
+  await fs.promises.mkdir(
+    path.dirname(destinationDirectory),
+    {
+      recursive: true
+    }
+  );
+
+  await fs.promises.cp(
+    sourceDirectory,
+    destinationDirectory,
+    {
+      recursive: true
+    }
+  );
+
+  console.log(
+    '[cue] Bundled verified static Windows Whisper runtime.'
+  );
+}
+
+module.exports =
+async function afterPack(context) {
+
+  const platform =
+    context.packager.platform.nodeName;
+
+  const architecture =
+    typeof context.arch === 'number'
+      ? Arch[context.arch]
+      : context.arch;
+
+  if (!platform || !architecture) {
+    throw new Error(
+      'electron-builder did not provide a runtime target.'
+    );
+  }
+
+  if (platform === 'win32') {
+    await bundlePreparedWindowsRuntime(
+      context,
+      architecture
+    );
+
     return;
   }
-  const platform = context.packager.platform.nodeName;
-  const architecture = typeof context.arch === 'number' ? Arch[context.arch] : context.arch;
-  if (!platform || !architecture) throw new Error('electron-builder did not provide a runtime target.');
 
-  const outputDirectory = path.join(context.appOutDir, 'resources', 'whisper-runtime');
-  await prepareWhisperRuntime({ platform, architecture, outputDirectory });
+  // Preserve existing behavior on non-Windows.
+  if (!process.env.CUE_BUNDLE_WHISPER) {
+    console.log(
+      '[cue] Skipping bundled Whisper runtime ' +
+      'on this platform.'
+    );
+
+    return;
+  }
+
+  const outputDirectory =
+    path.join(
+      context.appOutDir,
+      'resources',
+      'whisper-runtime'
+    );
+
+  await prepareWhisperRuntime({
+    platform,
+    architecture,
+    outputDirectory
+  });
 };

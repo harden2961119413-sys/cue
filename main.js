@@ -98,8 +98,14 @@ function pushTranscript(turn) {
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
 
 function getWhisperRuntime() {
+  // `electron .` development launches can still report app.isPackaged=true
+  // in customized/rebranded Electron builds.
+  // process.defaultApp is the reliable signal that the app was launched
+  // through the Electron development executable.
+  const runningFromSource = process.defaultApp === true;
+
   return locateWhisperRuntime({
-    isPackaged: app.isPackaged,
+    isPackaged: app.isPackaged && !runningFromSource,
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
     platform: process.platform,
@@ -773,15 +779,44 @@ function launchApp() {
 
   // System-audio loopback for getDisplayMedia: hand back a screen source with 'loopback'
   // audio so the renderer can capture what's playing (Zoom/Meet) using cue's own grant.
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      if (!sources.length) return callback();
-      const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
-      callback(request);
-    }).catch(() => callback());
-  }, { useSystemPicker: false });
+session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+  desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 0, height: 0 }
+  }).then(
+    (sources) => {
+      if (!sources.length) {
+        console.error('[cue] no screen source available');
+        callback({});
+        return;
+      }
+
+      const streams = {
+        video: sources[0]
+      };
+
+      // Electron expects "loopback", not boolean true.
+      // Windows supports system-audio loopback directly.
+      if (isWindows && _request.audioRequested) {
+        streams.audio = 'loopback';
+      }
+
+      // Important: call exactly once.
+      callback(streams);
+    },
+    (error) => {
+      // This is the rejection handler for getSources itself.
+      // It does NOT catch exceptions thrown by callback(), preventing
+      // accidental second invocation of the one-time callback.
+      console.error(
+        '[cue] desktopCapturer.getSources failed:',
+        error && error.message ? error.message : error
+      );
+
+      callback({});
+    }
+  );
+}, { useSystemPicker: false });
 
   // Started before the shortcuts so their registration failures are recorded.
   startAppLink({
