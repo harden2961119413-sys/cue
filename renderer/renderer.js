@@ -598,11 +598,25 @@
   }
 
   // ---- capture: mic (renderer side) — uses AudioWorklet (modern, off-main-thread) ----
-  let audioCtx = null, micStream = null, micWorklet = null;
+  let audioCtx = null;
+let micStream = null;
+let micWorklet = null;
+
+let micStarting = false;
+let micWanted = false;
   async function startMic() {
-    if (micStream) return;
+      micWanted = true;
+
+  if (
+    micStream ||
+    micStarting
+  ) {
+    return;
+  }
+
+  micStarting = true;
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -611,6 +625,15 @@
           sampleRate: 16000
         }
       });
+      if (!micWanted) {
+  stream
+    .getTracks()
+    .forEach((track) => track.stop());
+
+  return;
+}
+
+micStream = stream;
       // getUserMedia can resolve with a stream that has no usable audio track
       // (e.g. a virtual/placeholder device, or a device that was unplugged
       // between permission grant and capture start). Fail loudly here instead
@@ -672,8 +695,12 @@
         showStatus('Microphone capture could not be started. Check your mic permissions and try again.');
       }
     }
+    finally {
+  micStarting = false;
+}
   }
   function stopMic() {
+    micWanted = false;
     if (micWorklet) {
       if (micWorklet._legacy) {
         micWorklet.proc.disconnect(); micWorklet.proc.onaudioprocess = null;
@@ -928,39 +955,59 @@
 
   // ---- events from main --------------------------------------------------
   cue.on('capture:state', ({ active, streaming, mode }) => {
-    setLiveDotState(active ? 'idle' : 'off');
-    $('#stop-btn').classList.toggle('active', active);
-    // FIX #4: Add .listening class to composer when capture is active
-    composer.classList.toggle('listening', active);
-    // Update history button to show active state when listening
-    const historyBtn = document.getElementById('history-btn');
+    setLiveDotState(
+      active ? 'idle' : 'off'
+    );
+
+    $('#stop-btn')
+      .classList
+      .toggle('active', active);
+
+    composer
+      .classList
+      .toggle('listening', active);
+
+    const historyBtn =
+      document.getElementById('history-btn');
+
     if (historyBtn) {
-      historyBtn.classList.toggle('listening', active);
+      historyBtn
+        .classList
+        .toggle('listening', active);
     }
-    // startSystemAudio() is called directly from the stop-button click handler
-    // so that the getDisplayMedia request has a fresh user gesture.
-    // Here we only start the mic (no gesture required) and stop everything on deactivate.
+
     if (active) {
-      startMic();
-      // Don't auto-open sidebar — user can toggle it manually
+      // Only start the microphone once.
+      void startMic();
     } else {
       stopMic();
       stopSystemAudio();
-      // FIX #2: Clear interim element when capture stops
+
       if (interimEl) {
         interimEl.textContent = '';
         interimEl.classList.remove('show');
       }
-      // Don't auto-close sidebar — let user keep it open if they want
     }
-    updateSttStatus({ active, streaming });
-    if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
-    if (active && mode === 'local') {
+
+    if (
+      active &&
+      mode === 'local'
+    ) {
       sttState = 'local';
-      const label = document.getElementById('stt-status');
-      if (label) { label.textContent = 'local'; label.className = 'stt-status stt-local'; }
+
+      const label =
+        document.getElementById('stt-status');
+
+      if (label) {
+        label.textContent = 'local';
+        label.className =
+          'stt-status stt-local';
+      }
     } else {
-      updateSttStatus({ active, streaming });
+      updateSttStatus({
+        active,
+        streaming
+      });
     }
   });
 
@@ -1222,20 +1269,53 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  async function closeSettings() {
-    if (await saveSettings()) scrim.classList.add('hidden');
-  }
-  function openSettings() {
-    fillSettings();
-    scrim.classList.remove('hidden');
-    refreshWhisperModels();
-  }
-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
-  $('#more-btn').addEventListener('click', openSettings);
-  $('#s-close').addEventListener('click', () => { void closeSettings(); });
-  scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
 
+  async function openSettings() {
+    try {
+      // Settings 是全屏交互层，打开时必须关闭鼠标穿透。
+      setIgnore(false);
+
+      // renderer 的事件绑定早于 boot() 完成。
+      // 如果用户启动后立刻点 Settings，这里主动等待 settings 加载。
+      if (!settings) {
+        settings = await cue.settingsGet();
+      }
+
+      fillSettings();
+
+      // 显示 Settings
+      scrim.classList.remove('hidden');
+
+      // 刷新本地 Whisper 模型状态
+      await refreshWhisperModels();
+    } catch (error) {
+      const message =
+        error && error.message ? error.message : String(error);
+
+      cue.log('open settings failed: ' + message);
+      showStatus('Could not open Settings: ' + message);
+    }
+  }
+
+  async function closeSettings() {
+    if (await saveSettings()) {
+      scrim.classList.add('hidden');
+    }
+  }
+
+  $('#more-btn').addEventListener('click', () => {
+    void openSettings();
+  });
+
+  $('#s-close').addEventListener('click', () => {
+    void closeSettings();
+  });
+
+  scrim.addEventListener('click', (e) => {
+    if (e.target === scrim) {
+      void closeSettings();
+    }
+  });
   // Tab switching
   document.querySelectorAll('.s-tab').forEach((tab) => {
     tab.addEventListener('click', async () => {
@@ -1282,6 +1362,7 @@
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
+    $('#project-knowledge').value = settings.projectKnowledge || '';
     $('#job-description').value = settings.jobDescription || '';
     // Interview Prep tab
     $('#star-stories').value = settings.starStories || '';
@@ -1552,6 +1633,7 @@
     settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
     // Profile
     settings.resumeText = $('#resume-text').value.trim();
+    settings.projectKnowledge = $('#project-knowledge').value.trim();
     settings.jobDescription = $('#job-description').value.trim();
     // Interview Prep
     settings.starStories = $('#star-stories').value.trim();
@@ -1589,20 +1671,61 @@
 
   // ---- global keys -------------------------------------------------------
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !scrim.classList.contains('hidden')) closeSettings();
-    if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
+    if (
+      e.key === 'Escape' &&
+      !scrim.classList.contains('hidden')
+    ) {
+      e.preventDefault();
+      void closeSettings();
+    }
+
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      e.key === ','
+    ) {
+      e.preventDefault();
+      void openSettings();
+    }
   });
 
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
-  function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
-  document.addEventListener('mousemove', (e) => {
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
-    setIgnore(!overUI);
-  });
-  setIgnore(true); // start fully click-through; hovering the panel re-enables it
 
+  function setIgnore(v) {
+    if (v !== ignoring) {
+      ignoring = v;
+      cue.setIgnoreMouse(v);
+    }
+  }
+
+  // Windows / macOS 支持 ignored window 的 forwarded mousemove。
+  // 其他平台如果一开始就 setIgnore(true)，可能导致整个 UI 永久无法点击。
+  const supportsForwardedMouseMove = isWindows || isMac;
+
+  if (supportsForwardedMouseMove) {
+    document.addEventListener('mousemove', (e) => {
+      const el = document.elementFromPoint(
+        e.clientX,
+        e.clientY
+      );
+
+      const overUI = !!(
+        el &&
+        el.closest &&
+        el.closest(
+          '#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'
+        )
+      );
+
+      setIgnore(!overUI);
+    });
+
+    // 默认空白区域鼠标穿透；
+    // 鼠标移动到 cue UI 上时重新允许点击。
+    setIgnore(true);
+  } else {
+    setIgnore(false);
+  }
   // ---- assistant access request ------------------------------------------
   // Shown here rather than as a native dialog because cue hides its dock icon:
   // an OS panel from an accessory app never comes forward and cannot be

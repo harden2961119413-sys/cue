@@ -1,0 +1,87 @@
+diff --git a/renderer/renderer.js b/renderer/renderer.js
+--- a/renderer/renderer.js
++++ b/renderer/renderer.js
+@@ -1223,15 +1223,29 @@
+   // ---- settings ----------------------------------------------------------
+   const scrim = $('#settings-scrim');
+-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
+-  async function closeSettings() {
+-    if (await saveSettings()) scrim.classList.add('hidden');
+-  }
+-  function openSettings() {
+-    fillSettings();
+-    scrim.classList.remove('hidden');
+-    refreshWhisperModels();
+-  }
+-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+-  $('#more-btn').addEventListener('click', openSettings);
++
++  async function openSettings() {
++    try {
++      // Full-screen modal UI must never remain click-through.
++      setIgnore(false);
++
++      // The handlers are registered before boot() finishes. If the user clicks
++      // Settings immediately after launch, wait for settings rather than
++      // dereferencing null inside fillSettings().
++      if (!settings) settings = await cue.settingsGet();
++
++      fillSettings();
++      scrim.classList.remove('hidden');
++      await refreshWhisperModels();
++    } catch (error) {
++      const message = error && error.message ? error.message : String(error);
++      cue.log('open settings failed: ' + message);
++      showStatus('Could not open Settings: ' + message);
++    }
++  }
++
++  async function closeSettings() {
++    if (await saveSettings()) scrim.classList.add('hidden');
++  }
++
++  $('#more-btn').addEventListener('click', () => { void openSettings(); });
+   $('#s-close').addEventListener('click', () => { void closeSettings(); });
+   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
+
+@@ -1590,18 +1604,27 @@
+   // ---- global keys -------------------------------------------------------
+   document.addEventListener('keydown', (e) => {
+-    if (e.key === 'Escape' && !scrim.classList.contains('hidden')) closeSettings();
+-    if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
++    if (e.key === 'Escape' && !scrim.classList.contains('hidden')) {
++      e.preventDefault();
++      void closeSettings();
++    }
++    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
++      e.preventDefault();
++      void openSettings();
++    }
+   });
+
+   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
+   let ignoring = null;
+   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
+-  document.addEventListener('mousemove', (e) => {
+-    const el = document.elementFromPoint(e.clientX, e.clientY);
+-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
+-    setIgnore(!overUI);
+-  });
+-  setIgnore(true); // start fully click-through; hovering the panel re-enables it
++  const supportsForwardedMouseMove = isWindows || isMac;
++  if (supportsForwardedMouseMove) {
++    document.addEventListener('mousemove', (e) => {
++      const el = document.elementFromPoint(e.clientX, e.clientY);
++      const overUI = !!(el && el.closest && el.closest(
++        '#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'
++      ));
++      setIgnore(!overUI);
++    });
++    setIgnore(true);
++  } else {
++    // Electron's forwarded mouse-move mode is not available on Linux. Leaving
++    // the window ignored here makes every visible control permanently unclickable.
++    setIgnore(false);
++  }
+
+   // ---- assistant access request ------------------------------------------

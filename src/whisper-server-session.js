@@ -11,6 +11,7 @@ const HEALTH_POLL_MS = 150;
 const INFERENCE_TIMEOUT_MS = 120000;
 const PROCESS_EXIT_TIMEOUT_MS = 3000;
 const MAX_LOG_TAIL_CHARACTERS = 12000;
+const WINDOWS_ACCESS_VIOLATION =0xC0000005;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -185,16 +186,49 @@ class WhisperServerSession {
 
   _buildArguments(port, requestPath) {
     const argumentsList = [
-      '--model', this.modelPath,
-      '--host', LOOPBACK_HOST,
-      '--port', String(port),
-      '--request-path', requestPath,
-      '--language', this.language,
+      '--model',
+      this.modelPath,
+
+      '--host',
+      LOOPBACK_HOST,
+
+      '--port',
+      String(port),
+
+      '--request-path',
+      requestPath,
+
+      '--language',
+      this.language
+    ];
+
+    // cue Windows runtime is CPU-only.
+    // Keep these explicit as a safety guard.
+    if (process.platform === 'win32') {
+      argumentsList.push(
+        '--no-gpu',
+        '--no-flash-attn'
+      );
+    }
+
+    argumentsList.push(
       '--no-timestamps',
       '--suppress-nst'
-    ];
-    if (this.threads > 0) argumentsList.push('--threads', String(this.threads));
-    if (this.tinydiarize) argumentsList.push('--tinydiarize');
+    );
+
+    if (this.threads > 0) {
+      argumentsList.push(
+        '--threads',
+        String(this.threads)
+      );
+    }
+
+    if (this.tinydiarize) {
+      argumentsList.push(
+        '--tinydiarize'
+      );
+    }
+
     return argumentsList;
   }
 
@@ -212,16 +246,68 @@ class WhisperServerSession {
 
   _observeChild(child) {
     const collectLog = (data) => {
-      this.logTail = (this.logTail + data.toString()).slice(-MAX_LOG_TAIL_CHARACTERS);
+      this.logTail = (
+        this.logTail +
+        data.toString()
+      ).slice(
+        -MAX_LOG_TAIL_CHARACTERS
+      );
     };
-    child.stdout?.on('data', collectLog);
-    child.stderr?.on('data', collectLog);
-    child.once('error', (error) => { this.exitError = error; });
-    child.once('exit', (code, signal) => {
-      if (this.child === child) {
-        this.exitError = new Error(`whisper-server exited (${code ?? signal}). ${this.logTail.slice(-800)}`);
+
+    child.stdout?.on(
+      'data',
+      collectLog
+    );
+
+    child.stderr?.on(
+      'data',
+      collectLog
+    );
+
+    child.once(
+      'error',
+      (error) => {
+        this.exitError = error;
       }
-    });
+    );
+
+    child.once(
+      'exit',
+      (code, signal) => {
+
+        if (this.child !== child) {
+          return;
+        }
+
+        const unsignedCode =
+          Number.isInteger(code)
+            ? (code >>> 0)
+            : null;
+
+        if (
+          process.platform === 'win32' &&
+          unsignedCode === WINDOWS_ACCESS_VIOLATION
+        ) {
+          this.exitError =
+            new Error(
+              'Local Whisper runtime crashed with ' +
+              'Windows Access Violation (0xC0000005). ' +
+              'Rebuild the verified static CPU runtime ' +
+              'with `npm run prepare:whisper`. ' +
+              this.logTail.slice(-1200)
+            );
+
+          return;
+        }
+
+        this.exitError =
+          new Error(
+            `whisper-server exited ` +
+            `(${code ?? signal}). ` +
+            this.logTail.slice(-1200)
+          );
+      }
+    );
   }
 
   async _waitUntilHealthy() {

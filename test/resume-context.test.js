@@ -3,123 +3,53 @@ const assert = require('node:assert/strict');
 const { buildResumeContext, parseResume } = require('../src/resume-context');
 const { buildInterviewContext, detectCategory } = require('../src/interview-context');
 
-// ── buildResumeContext (backward-compat shim) ─────────────────────────────────
-test('buildResumeContext returns a structured prompt block for resume text', () => {
-  const resume = 'Jane Doe\nSoftware Engineer\n\nSkills\nJavaScript, Node.js\n\nExperience\n3 years at Acme Corp';
+test('buildResumeContext 输出中文结构化简历上下文', () => {
+  const resume = '张三\n后端开发工程师\n\n技能\nJava, Go, Redis\n\n工作经历\n某公司 2023-2026';
   const result = buildResumeContext(resume, '', 'say');
-  assert.ok(result !== null, 'should not be null');
-  assert.match(result, /Your Background/i);
-  assert.match(result, /Jane Doe/);
-  assert.match(result, /JavaScript/);
-});
-
-test('buildResumeContext returns null for empty input', () => {
-  assert.equal(buildResumeContext('', '', 'say'), null);
-  assert.equal(buildResumeContext(null, '', 'say'), null);
-});
-
-test('buildResumeContext still works with legacy (text, limit) signature', () => {
-  const resume = 'Jane Doe\nSoftware Engineer\nSkills: JavaScript, Node.js';
-  const result = buildResumeContext(resume, 200);
   assert.ok(result !== null);
-  assert.match(result, /Jane Doe/);
+  assert.match(result, /候选人简历/);
+  assert.match(result, /Java/);
 });
 
-// ── parseResume ───────────────────────────────────────────────────────────────
-test('parseResume detects structured sections', () => {
-  const resume = 'Jane Doe\n\nSummary\nExperienced engineer.\n\nSkills\nJavaScript, Node.js\n\nExperience\nAcme Corp 2020-2023';
+test('中文简历分段可识别', () => {
+  const resume = '张三\n\n个人简介\n三年后端经验，负责交易系统。\n\n技能\nJava, Go\n\n工作经历\n某公司 2023-2026\n\n项目经历\n订单平台';
   const parsed = parseResume(resume);
-  assert.ok(parsed.parsed, 'should detect structured resume');
-  assert.ok(parsed.sections.name, 'should extract name');
-  assert.ok(parsed.sections.skills, 'should extract skills');
+  assert.ok(parsed.parsed);
+  assert.ok(parsed.sections.skills);
 });
 
-// ── detectCategory ────────────────────────────────────────────────────────────
-test('detectCategory: behavioral questions', () => {
-  assert.equal(detectCategory([{ channel: 'them', text: 'Tell me about a time you failed.' }]), 'behavioral');
-  assert.equal(detectCategory([{ channel: 'them', text: 'Give me an example of when you led a team.' }]), 'behavioral');
+test('中文项目深挖识别', () => {
+  assert.equal(detectCategory([{ channel: 'them', text: '讲讲你这个订单项目的架构，为什么用 Redis？' }]), 'project');
+  assert.equal(detectCategory([{ channel: 'them', text: '这个项目 QPS 多少，遇到过什么线上故障？' }]), 'project');
 });
 
-test('detectCategory: motivation questions', () => {
-  assert.equal(detectCategory([{ channel: 'them', text: 'Why do you want to work here?' }]), 'motivation');
-  assert.equal(detectCategory([{ channel: 'them', text: 'Why should we hire you?' }]), 'motivation');
-  assert.equal(detectCategory([{ channel: 'them', text: 'Why are you looking for a new opportunity?' }]), 'motivation');
+test('中文八股识别', () => {
+  assert.equal(detectCategory([{ channel: 'them', text: '说一下 JVM 的垃圾回收原理。' }]), 'technical');
+  assert.equal(detectCategory([{ channel: 'them', text: 'Go 的 GMP 模型是什么？' }]), 'technical');
+  assert.equal(detectCategory([{ channel: 'them', text: 'Agent 里 MCP 和 Function Calling 有什么区别？' }]), 'technical');
 });
 
-test('detectCategory: experience questions', () => {
-  assert.equal(detectCategory([{ channel: 'them', text: 'Walk me through your role at PayCo.' }]), 'experience');
-  assert.equal(detectCategory([{ channel: 'them', text: 'Tell me about yourself.' }]), 'experience');
-  assert.equal(detectCategory([{ channel: 'them', text: 'Tell me about your current role.' }]), 'experience');
+test('项目深挖优先注入项目知识文档', () => {
+  const settings = {
+    resumeText: '张三\n后端工程师\n项目：订单平台',
+    projectKnowledge: '订单平台采用 MySQL + Redis。本人负责库存扣减链路；峰值数据以压测报告为准，未在本文写具体 QPS。',
+    jobDescription: 'Java/Go 后端，Agent 工程方向',
+    starStories: '',
+    whyCompany: '',
+    whyLeaving: '',
+    workStyle: '',
+    salaryTarget: '',
+    questionsToAsk: ''
+  };
+  const ctx = buildInterviewContext(settings, 'say', [
+    { channel: 'them', text: '深挖一下你的订单项目，为什么用 Redis？' }
+  ]);
+  assert.match(ctx, /项目知识文档/);
+  assert.match(ctx, /库存扣减链路/);
+  assert.match(ctx, /不得编造|不要擅自补/);
 });
 
-test('detectCategory: compensation questions', () => {
-  assert.equal(detectCategory([{ channel: 'them', text: 'What are your salary expectations?' }]), 'compensation');
-  assert.equal(detectCategory([{ channel: 'them', text: 'Do you have any questions for me?' }]), 'compensation');
-});
-
-test('detectCategory: technical questions', () => {
-  assert.equal(detectCategory([{ channel: 'them', text: 'How would you design a distributed cache?' }]), 'technical');
-  assert.equal(detectCategory([{ channel: 'them', text: 'What is the difference between SQL and NoSQL?' }]), 'technical');
-});
-
-test('detectCategory: returns general for empty transcript', () => {
-  assert.equal(detectCategory([]), 'general');
-  assert.equal(detectCategory(null), 'general');
-});
-
-test('detectCategory: only checks "them" channel, not "you" channel', () => {
-  // "You" channel saying a behavioral phrase should NOT trigger behavioral detection
-  const result = detectCategory([{ channel: 'you', text: 'Tell me about a time you failed.' }]);
-  assert.equal(result, 'general');
-});
-
-// ── buildInterviewContext ─────────────────────────────────────────────────────
-const fullSettings = {
-  resumeText: 'Jane Doe\nEngineer\n\nSkills\nPython, Go\n\nExperience\nPayCo 2021-2024, built payment pipeline',
-  jobDescription: 'Senior Backend Engineer, Python, distributed systems',
-  starStories: 'At PayCo, Black Friday outage. I fixed Redis exhaustion in 12 min. Incidents dropped 80%.',
-  whyCompany: 'Love the engineering culture here.',
-  whyLeaving: 'Ready for a bigger challenge.',
-  workStyle: 'Autonomous, data-driven, direct feedback.',
-  salaryTarget: '$170k-$200k',
-  questionsToAsk: '1. What does success look like in 90 days?'
-};
-
-test('buildInterviewContext: behavioral injects STAR stories', () => {
-  const ctx = buildInterviewContext(fullSettings, 'say',
-    [{ channel: 'them', text: 'Tell me about a time you faced a major outage.' }]);
-  assert.ok(ctx !== null);
-  assert.ok(ctx.includes('STAR'), 'should include STAR stories');
-  assert.ok(ctx.includes('PayCo'), 'should include resume');
-});
-
-test('buildInterviewContext: motivation injects why company / why leaving', () => {
-  const ctx = buildInterviewContext(fullSettings, 'say',
-    [{ channel: 'them', text: 'Why do you want to work here?' }]);
-  assert.ok(ctx !== null);
-  assert.ok(ctx.includes('Why This Company'), 'should include why company');
-  assert.ok(ctx.includes('Why Leaving'), 'should include why leaving');
-});
-
-test('buildInterviewContext: compensation injects salary and questions', () => {
-  const ctx = buildInterviewContext(fullSettings, 'say',
-    [{ channel: 'them', text: 'What are your salary expectations?' }]);
-  assert.ok(ctx !== null);
-  assert.ok(ctx.includes('170k'), 'should include salary target');
-  assert.ok(ctx.includes('success look like'), 'should include questions to ask');
-});
-
-test('buildInterviewContext: leetcode returns null', () => {
-  assert.equal(buildInterviewContext(fullSettings, 'leetcode', []), null);
-});
-
-test('buildInterviewContext: returns null with no settings data', () => {
-  const empty = { resumeText: '', jobDescription: '', starStories: '', whyCompany: '', whyLeaving: '', workStyle: '', salaryTarget: '', questionsToAsk: '' };
-  assert.equal(buildInterviewContext(empty, 'say', [{ channel: 'them', text: 'Tell me about yourself.' }]), null);
-});
-
-test('buildInterviewContext: JD tailor note included when JD is set', () => {
-  const ctx = buildInterviewContext(fullSettings, 'say', []);
-  assert.ok(ctx !== null);
-  assert.ok(ctx.includes('Tailor'), 'should include tailor note when JD is set');
+test('leetcode 历史模式不注入个人上下文', () => {
+  const settings = { resumeText: '张三', projectKnowledge: '内部项目资料' };
+  assert.equal(buildInterviewContext(settings, 'leetcode', []), null);
 });

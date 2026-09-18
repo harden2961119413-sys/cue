@@ -27,10 +27,12 @@ class LocalWhisperTranscriber {
     this.queueTail = Promise.resolve();
     this.pendingJobs = 0;
     this.acceptingAudio = false;
-    this.discardPendingJobs = false;
+this.discardPendingJobs = false;
+this.stopping = false;  
   }
 
   async start() {
+    this.stopping = false;
     this.discardPendingJobs = false;
     await this.session.start();
     for (const channel of CHANNELS) {
@@ -59,7 +61,8 @@ class LocalWhisperTranscriber {
   }
 
   async stop() {
-    this.acceptingAudio = false;
+      this.stopping = true;
+  this.acceptingAudio = false;
     for (const segmenter of this.segmenters.values()) segmenter.stop();
 
     const drained = await this._drainQueue();
@@ -81,7 +84,13 @@ class LocalWhisperTranscriber {
 
   _enqueue(channel, pcm) {
     this.pendingJobs += 1;
-    this.onStatus({ status: 'transcribing', channel, pending: this.pendingJobs });
+   if (!this.stopping) {
+  this.onStatus({
+    status: 'transcribing',
+    channel,
+    pending: this.pendingJobs
+  });
+}
 
     const job = this.queueTail.then(async () => {
       if (this.discardPendingJobs) return;
