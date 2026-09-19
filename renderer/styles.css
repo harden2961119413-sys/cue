@@ -53,7 +53,11 @@ html, body {
   pointer-events: none;                  /* only the actual UI blocks; gaps pass through */
 }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
-#toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
+#toolbar,
+.drag-handle,
+.drag-pill {
+  -webkit-app-region: no-drag;
+}  /* drag the top pill to move the window */
 #panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
 
 /* ============================ Toolbar pill ============================ */
@@ -69,7 +73,7 @@ html, body {
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
 }
-.drag-handle { -webkit-app-region: drag; }
+
 .drag-pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: var(--r-pill);
@@ -77,7 +81,9 @@ html, body {
   color: rgba(255,255,255,0.8);
   font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
   cursor: grab;
-  -webkit-app-region: drag;
+}
+.drag-pill.dragging {
+  cursor: grabbing;
 }
 .drag-pill:hover { background: rgba(255,255,255,0.10); }
 .drag-dots {
@@ -170,7 +176,12 @@ button:focus { outline: none; }
 #panel.collapsed { display: none; }
 
 /* ============================ Messages ============================ */
-#messages { display: flex; flex-direction: column; overflow-y: auto; max-height: 50vh; }
+#messages { 
+    display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 50vh;
+}
 .user-bubble {
   align-self: flex-end;
   max-width: 75%;
@@ -182,25 +193,65 @@ button:focus { outline: none; }
   box-shadow: 0 2px 8px rgba(60,131,245,0.35);
   animation: fadeUp 200ms ease both;
 }
+
 .ai-text {
   color: var(--tx-1);
-  font-size: 20px; font-weight: 400; line-height: 1.5; letter-spacing: -0.01em;
-  text-align: left; margin: 14px 0 2px;
-  -webkit-user-select: text; user-select: text;
+
+  /* ===== AI回答字体大小 ===== */
+  font-size: 15px;
+
+  font-weight: 400;
+
+  /* ===== AI回答行距 ===== */
+  line-height: 1.42;
+
+  letter-spacing: -0.005em;
+  text-align: left;
+
+  /* ===== 回答上下间距 ===== */
+  margin: 9px 0 2px;
+
+  -webkit-user-select: text;
+  user-select: text;
 }
-.ai-text.small { font-size: 16px; line-height: 1.55; }
-.ai-text .w { display: inline; opacity: 0; animation: fadeUp 180ms ease forwards; }
-.ai-text ul { margin: 8px 0; padding-left: 20px; }
-.ai-text li { margin: 4px 0; }
+
+/* 小型 AI 消息 */
+.ai-text.small {
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+/* 列表 */
+.ai-text ul {
+  margin: 5px 0;
+  padding-left: 18px;
+}
+
+.ai-text li {
+  margin: 2px 0;
+}
+
+/* 代码块 */
 .ai-text pre {
   background: rgba(0,0,0,0.35);
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 10px;
-  padding: 12px 14px;
+  border-radius: 8px;
+
+  padding: 8px 10px;
   overflow-x: auto;
+
   font-family: var(--mono);
-  font-size: 13px; line-height: 1.5;
-  margin: 12px 0;
+
+  /* ===== 代码字体大小 ===== */
+  font-size: 11.5px;
+
+  line-height: 1.4;
+  margin: 7px 0;
+}
+
+.ai-text code {
+  font-family: var(--mono);
+  font-size: 0.92em;
 }
 .ai-text code { font-family: var(--mono); font-size: 0.92em; }
 .ai-text p code { background: rgba(255,255,255,0.10); padding: 1px 5px; border-radius: 5px; }

@@ -10,41 +10,35 @@
   <div id="app">
     <!-- Dedicated drag handle / top bar -->
     <div id="toolbar" class="drag-handle">
-      <div class="drag-pill" title="Drag to move window">
+      <div class="drag-pill">
         <span class="drag-dots" aria-hidden="true"></span>
         <span class="drag-label">Drag</span>
       </div>
-      <button class="tb-logo" id="logo-btn" title="cue"></button>
+      <button class="tb-logo" id="logo-btn"></button>
       <div class="tb-divider"></div>
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
-      <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
+      <button class="tb-stop" id="stop-btn"></button>
       <div class="tb-divider"></div>
-      <button class="tb-quit" id="quit-btn" title="Quit cue (⌘⇧X)"></button>
+      <button class="tb-quit" id="quit-btn"></button>
     </div>
 
     <!-- Main assistant panel -->
     <div id="panel-wrap">
       <span id="live-dot" class="off"></span>
-      <div id="stt-status" class="stt-status stt-disconnected" title="STT connection status">off</div>
+      <div id="stt-status" class="stt-status stt-disconnected">off</div>
       <div id="panel" class="glass no-drag">
-
-        <!-- Two-column layout: responses (left) + live transcript sidebar (right) -->
         <div id="panel-columns">
-
-          <!-- Left column: AI responses -->
           <div id="panel-main">
             <div id="messages"></div>
 
             <div id="action-row">
-              <button class="act act-primary" data-mode="say"
-                title="Suggests what to say next based on the conversation">
+              <button class="act act-primary" data-mode="say">
                 <span class="ic"></span><span>What should I say?</span>
                 <span class="shortcut-hint" id="say-shortcut-hint"></span>
               </button>
               <span class="sep">•</span>
-              <button class="act act-secondary" data-mode="assist"
-                title="Scans your screen and conversation to decide what you need">
+              <button class="act act-secondary" data-mode="assist">
                 <span class="ic"></span><span>Assist</span>
                 <span class="shortcut-hint" id="assist-shortcut-hint"></span>
               </button>
@@ -61,10 +55,10 @@
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-                <button id="history-btn" class="history-btn" title="View conversation history"><span class="ic"></span></button>
-                <button id="more-btn" class="more-btn" title="Settings"></button>
+                <button id="history-btn" class="history-btn"><span class="ic"></span></button>
+                <button id="more-btn" class="more-btn"></button>
                 <div class="spacer"></div>
-                <button id="send-btn" title="Send"></button>
+                <button id="send-btn"></button>
               </div>
             </div>
 
@@ -75,22 +69,20 @@
               <span class="prep-item" data-field="salary">💰 Salary</span>
             </div>
           </div>
-
-        </div><!-- /panel-columns -->
+        </div>
       </div>
     </div>
 
-    <!-- Transcript history sidebar — floats OUTSIDE main panel, toggled by history button -->
     <div id="transcript-sidebar" class="transcript-sidebar hidden">
       <div class="ts-header">
         <span class="ts-title">Conversation History</span>
-        <button class="ts-close-btn" id="close-sidebar-btn" title="Close history">✕</button>
+        <button class="ts-close-btn" id="close-sidebar-btn">✕</button>
       </div>
       <div id="ts-list" class="ts-list">
         <div class="ts-placeholder">Conversation history will appear here when listening.</div>
       </div>
       <div class="ts-footer">
-        <button class="ts-clear-btn" id="clear-transcript-btn" title="Clear all history">Clear History</button>
+        <button class="ts-clear-btn" id="clear-transcript-btn">Clear History</button>
       </div>
     </div>
   </div>
@@ -103,7 +95,6 @@
         <button id="s-close" class="s-close">Done</button>
       </div>
 
-      <!-- Tab bar -->
       <div class="s-tabs">
         <button class="s-tab on" data-tab="keys">🔑 Keys</button>
         <button class="s-tab" data-tab="transcription">Audio</button>
@@ -144,7 +135,7 @@
         <div id="custom-endpoint-settings" class="hidden">
           <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
           <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
-          <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
+          <div class="s-help">When Custom points to Alibaba Model Studio, Qwen ASR can reuse the same API key and region automatically.</div>
         </div>
         <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
         <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
@@ -168,12 +159,45 @@
         <label class="s-label">Speech-to-text provider</label>
         <div class="s-seg s-seg-wrap" id="stt-provider-seg">
           <button data-stt-provider="auto">Auto</button>
+          <button data-stt-provider="qwen">Qwen ASR</button>
           <button data-stt-provider="local">Local</button>
           <button data-stt-provider="deepgram">Deepgram</button>
           <button data-stt-provider="openai">OpenAI</button>
           <button data-stt-provider="gemini">Gemini</button>
         </div>
-        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+        <div class="s-note">
+          Qwen ASR uses qwen-audio-3.0-asr-flash-streaming and reuses the Alibaba Model Studio key + Base URL from Custom.
+          If Custom uses a Beijing endpoint, ASR uses Beijing; if it uses Singapore/Workspace endpoint, ASR follows that host.
+          Auto prefers Qwen when Custom points to Alibaba, then Deepgram, then OpenAI.
+        </div>
+
+
+        <div id="qwen-asr-settings" class="whisper-card">
+          <label class="s-label">Qwen ASR model</label>
+          <select id="qwen-asr-model" class="s-select">
+            <option value="qwen-audio-3.0-asr-flash-streaming">Qwen Audio 3.0 ASR Streaming</option>
+            <option value="qwen-audio-3.0-asr-flash">Qwen Audio 3.0 ASR Flash</option>
+          </select>
+
+          <label class="s-label">Recognition context</label>
+          <div class="s-checkbox-row">
+            <label><input id="qwen-use-resume" type="checkbox" checked> Resume</label>
+            <label><input id="qwen-use-project" type="checkbox" checked> Project Knowledge</label>
+            <label><input id="qwen-use-jd" type="checkbox" checked> JD</label>
+          </div>
+
+          <label class="s-label">Language hint</label>
+          <select id="qwen-language" class="s-select">
+            <option value="auto">Auto</option>
+            <option value="zh">Chinese</option>
+            <option value="en">English</option>
+            <option value="ja">Japanese</option>
+          </select>
+
+          <label class="s-label">Custom vocabulary</label>
+          <textarea id="qwen-vocabulary" rows="4" spellcheck="false"
+            placeholder="Java&#10;Spring Boot&#10;Kafka&#10;Redis&#10;Kubernetes"></textarea>
+        </div>
 
         <div class="whisper-card">
           <div class="whisper-runtime-row">
@@ -239,7 +263,7 @@
 
       <!-- Tab: Interview Prep -->
       <div class="s-body s-tab-pane hidden" data-pane="prep">
-        <label class="s-label">Your STAR stories <span class="s-hint">write 3–5 real behavioral stories — used for "tell me about a time…" questions</span></label>
+        <label class="s-label">Your STAR stories <span class="s-hint">write 3–5 real behavioral stories — used for &quot;tell me about a time…&quot; questions</span></label>
         <textarea id="star-stories" rows="8" spellcheck="false" placeholder="Story 1: At [Company], we faced [situation]. I was responsible for [task]. I did [specific actions]. The result was [outcome with metrics if possible].&#10;&#10;Story 2: ..."></textarea>
 
         <label class="s-label">Why this company <span class="s-hint">used for motivation questions</span></label>
@@ -276,8 +300,6 @@
           These rules tell cue <strong>how</strong> to write, not <strong>what</strong> to say. Use one imperative sentence per line (e.g. <em>Never use em-dashes.</em>). They apply to every mode except coding-problem solves (LeetCode), which stays strict. Stored locally; never sent anywhere except the AI provider when cue answers a question.
         </div>
       </div>
-
-
     </div>
   </div>
 
@@ -298,9 +320,7 @@
     </div>
   </div>
 
-  <!-- Assistant access request. Shown in-window rather than as a native dialog:
-       cue hides its dock icon, so an OS panel never comes forward and cannot be
-       clicked. -->
+  <!-- Assistant access request -->
   <div id="consent-scrim" class="hidden">
     <div id="consent" class="glass">
       <div class="cs-title" id="cs-title"></div>

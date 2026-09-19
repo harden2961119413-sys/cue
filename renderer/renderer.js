@@ -1333,6 +1333,39 @@ micStream = stream;
     $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
   }
 
+
+  function fillQwenAsrSettings() {
+    const q = settings.qwenAsr || {};
+    const model = $('#qwen-asr-model');
+    const lang = $('#qwen-language');
+    const resume = $('#qwen-use-resume');
+    const project = $('#qwen-use-project');
+    const jd = $('#qwen-use-jd');
+    const vocab = $('#qwen-vocabulary');
+
+    if (model) model.value = q.model || 'qwen-audio-3.0-asr-flash-streaming';
+    if (lang) lang.value = q.language || 'auto';
+    if (resume) resume.checked = q.useResume !== false;
+    if (project) project.checked = q.useProjectKnowledge !== false;
+    if (jd) jd.checked = q.useJobDescription !== false;
+    if (vocab) vocab.value = (q.vocabulary || []).join('\n');
+  }
+
+  function saveQwenAsrSettings() {
+    settings.qwenAsr = {
+      ...(settings.qwenAsr || {}),
+      model: $('#qwen-asr-model')?.value || 'qwen-audio-3.0-asr-flash-streaming',
+      language: $('#qwen-language')?.value || 'auto',
+      useResume: $('#qwen-use-resume')?.checked !== false,
+      useProjectKnowledge: $('#qwen-use-project')?.checked !== false,
+      useJobDescription: $('#qwen-use-jd')?.checked !== false,
+      vocabulary: ($('#qwen-vocabulary')?.value || '')
+        .split('\n')
+        .map(x => x.trim())
+        .filter(Boolean)
+    };
+  }
+
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
@@ -1360,6 +1393,7 @@ micStream = stream;
     const localWhisper = settings.localWhisper || { modelId: 'small', language: 'zh', threads: 0 };
     $('#whisper-language').value = localWhisper.language || 'zh';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
+    fillQwenAsrSettings();
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
     $('#project-knowledge').value = settings.projectKnowledge || '';
@@ -1714,6 +1748,7 @@ cue.on(
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
     settings.localWhisper.language = $('#whisper-language').value || 'auto';
     settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
+    saveQwenAsrSettings();
     // Profile
     settings.resumeText = $('#resume-text').value.trim();
     settings.projectKnowledge = $('#project-knowledge').value.trim();

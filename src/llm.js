@@ -163,12 +163,20 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     }
   });
 
-  const stream = await client.chat.completions.create({
+const stream = await client.chat.completions.create({
     model,
     messages,
     stream: true,
-    max_tokens: maxTokens
-  });
+    max_tokens: maxTokens,
+
+    // Qwen 极速面试模式
+    // 只对阿里云 Qwen 生效
+    ...(String(model).toLowerCase().startsWith('qwen')
+        ? {
+            reasoning_effort: 'none'
+        }
+        : {})
+});
 
   let full = '';
   let finishReason = null;
