@@ -90,7 +90,31 @@ class OpenAIRealtimeSTT {
       this.ws.on('error', (err) => {
         this.onError({ provider: 'openai-realtime', message: err.message, status: null });
       });
+      this.ws.on(
+  'unexpected-response',
+  (_request, response) => {
+    let body = '';
 
+    response.on(
+      'data',
+      (chunk) => {
+        body +=
+          chunk.toString();
+      }
+    );
+
+    response.on(
+      'end',
+      () => {
+        console.error(
+          '[deepgram] unexpected response',
+          response.statusCode,
+          body
+        );
+      }
+    );
+  }
+);
     } catch (e) {
       this.onError({ provider: 'openai-realtime', message: e.message, status: null });
     }
@@ -221,37 +245,65 @@ class DeepgramStreamingSTT {
   constructor(apiKey, options = {}) {
     this.apiKey = apiKey;
     this.model = options.model || 'nova-3';
+
     this.ws = null;
     this.connected = false;
-    this.onTranscript = options.onTranscript || (() => {});
-    this.onInterim = options.onInterim || (() => {});
-    this.onError = options.onError || (() => {});
-    this.onStatusChange = options.onStatusChange || (() => {});
+
+    this.onTranscript =
+      options.onTranscript || (() => {});
+
+    this.onInterim =
+      options.onInterim || (() => {});
+
+    this.onError =
+      options.onError || (() => {});
+
+    this.onStatusChange =
+      options.onStatusChange || (() => {});
+
     this._reconnectAttempts = 0;
     this._maxReconnectAttempts = 5;
     this._reconnectDelay = 1000;
+
     this._keepAliveInterval = null;
-    this._committed = ''; // is_final segments not yet closed out by speech_final
+    this._committed = '';
+
+    // Prevent deliberate shutdown
+    // from starting another reconnect cycle.
+    this._allowReconnect = true;
   }
 
   async connect() {
     if (this.ws && this.connected) return;
-
+    this._allowReconnect = true;
     try {
       const WebSocket = require('ws');
       const params = new URLSearchParams({
-        model: this.model,
-        language: 'en',
-        smart_format: 'true',
-        interim_results: 'true',
-        utterance_end_ms: '1000',
-        vad_events: 'true',
-        encoding: 'linear16',
-        sample_rate: '16000',
-        channels: '1',
-        endpointing: '300',
-        punctuate: 'true'
-      });
+  model: this.model,
+
+  // Nova-3 supports Simplified Mandarin.
+  language: 'zh-CN',
+
+  smart_format: 'true',
+  interim_results: 'true',
+
+  // Deepgram requires >= 1000 ms.
+  // This is only a fallback utterance-end signal;
+  // normal finalization is handled faster by endpointing below.
+  utterance_end_ms: '1000',
+
+  vad_events: 'true',
+
+  encoding: 'linear16',
+  sample_rate: '16000',
+  channels: '1',
+
+  // About 300 ms is a good low-latency
+  // starting point for conversational speech.
+  endpointing: '300',
+
+  punctuate: 'true'
+});
 
       const url = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
 
@@ -279,11 +331,21 @@ class DeepgramStreamingSTT {
       });
 
       this.ws.on('close', (code) => {
-        this.connected = false;
-        this._clearKeepAlive();
-        this.onStatusChange('disconnected');
-        if (code !== 1000) this._attemptReconnect();
-      });
+  this.connected = false;
+
+  this._clearKeepAlive();
+
+  this.onStatusChange(
+    'disconnected'
+  );
+
+  if (
+    code !== 1000 &&
+    this._allowReconnect
+  ) {
+    this._attemptReconnect();
+  }
+});
 
       this.ws.on('error', (err) => {
         this.onError({ provider: 'deepgram', message: err.message, status: null });
@@ -343,27 +405,93 @@ class DeepgramStreamingSTT {
     if (this._keepAliveInterval) { clearInterval(this._keepAliveInterval); this._keepAliveInterval = null; }
   }
 
-  _attemptReconnect() {
-    if (this._reconnectAttempts >= this._maxReconnectAttempts) {
-      this.onError({ provider: 'deepgram', message: 'Max reconnection attempts reached', status: null });
-      return;
-    }
-    this._reconnectAttempts++;
-    const delay = this._reconnectDelay * Math.pow(2, this._reconnectAttempts - 1);
-    setTimeout(() => this.connect(), Math.min(delay, 16000));
+_attemptReconnect() {
+  if (!this._allowReconnect) {
+    return;
   }
 
-  disconnect() {
-    this._flushCommitted();
-    this._clearKeepAlive();
-    if (this.ws) {
-      // Send CloseStream message for clean shutdown
-      try { this.ws.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) { /* ignore */ }
-      this.ws.close(1000);
-      this.ws = null;
-    }
-    this.connected = false;
+  if (
+    this._reconnectAttempts >=
+    this._maxReconnectAttempts
+  ) {
+    this.onError({
+      provider: 'deepgram',
+      message:
+        'Max reconnection attempts reached',
+      status: null
+    });
+
+    return;
   }
+
+  this._reconnectAttempts++;
+
+  const delay =
+    this._reconnectDelay *
+    Math.pow(
+      2,
+      this._reconnectAttempts - 1
+    );
+
+  setTimeout(() => {
+    if (!this._allowReconnect) {
+      return;
+    }
+
+    this.connect();
+  }, Math.min(delay, 16000));
+}
+
+disconnect() {
+  this._allowReconnect = false;
+
+  this._flushCommitted();
+  this._clearKeepAlive();
+
+  const ws = this.ws;
+
+  this.ws = null;
+  this.connected = false;
+
+  if (!ws) {
+    return;
+  }
+
+  // Do not call close() blindly on a
+  // CONNECTING websocket. ws throws:
+  // "WebSocket was closed before the
+  // connection was established".
+  try {
+    if (ws.readyState === 1) {
+      // OPEN
+      try {
+        ws.send(
+          JSON.stringify({
+            type: 'CloseStream'
+          })
+        );
+      } catch (_) {}
+
+      ws.close(1000);
+
+    } else if (
+      ws.readyState === 0
+    ) {
+      // CONNECTING
+      ws.terminate();
+
+    } else if (
+      ws.readyState !== 3
+    ) {
+      // CLOSING but not CLOSED
+      ws.terminate();
+    }
+  } catch (_) {
+    try {
+      ws.terminate();
+    } catch (_) {}
+  }
+}
 }
 
 // ============================================================================

@@ -664,7 +664,7 @@ micStream = stream;
         // Fallback to ScriptProcessor if AudioWorklet fails (shouldn't happen in Electron 33+)
         cue.log('AudioWorklet failed, falling back to ScriptProcessor: ' + workletErr.message);
         const micNode = audioCtx.createMediaStreamSource(micStream);
-        const micProc = audioCtx.createScriptProcessor(4096, 1, 1);
+        const micProc = audioCtx.createScriptProcessor(1024, 1, 1);
         const sink = audioCtx.createGain(); sink.gain.value = 0;
         micNode.connect(micProc); micProc.connect(sink); sink.connect(audioCtx.destination);
         micProc.onaudioprocess = (e) => {
@@ -757,7 +757,7 @@ micStream = stream;
         // Fallback to ScriptProcessor
         cue.log('system audio AudioWorklet failed, using ScriptProcessor: ' + workletErr.message);
         const sysNode = sysCtx.createMediaStreamSource(new MediaStream(tracks));
-        const sysProc = sysCtx.createScriptProcessor(4096, 1, 1);
+        const sysProc = sysCtx.createScriptProcessor(1024, 1, 1);
         const sink = sysCtx.createGain(); sink.gain.value = 0;
         sysNode.connect(sysProc); sysProc.connect(sink); sink.connect(sysCtx.destination);
         sysProc.onaudioprocess = (e) => {
@@ -1357,8 +1357,8 @@ micStream = stream;
     document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
       button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
     });
-    const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
-    $('#whisper-language').value = localWhisper.language || 'auto';
+    const localWhisper = settings.localWhisper || { modelId: 'small', language: 'zh', threads: 0 };
+    $('#whisper-language').value = localWhisper.language || 'zh';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
@@ -1508,7 +1508,7 @@ micStream = stream;
   async function refreshWhisperModels() {
     const status = $('#whisper-status');
     try {
-      const previousSelection = $('#whisper-model').value || settings.localWhisper?.modelId || 'base.en';
+      const previousSelection = $('#whisper-model').value || settings.localWhisper?.modelId || 'small';
       whisperOverview = await cue.whisperModels();
       const runtimeBadge = $('#whisper-runtime-status');
       runtimeBadge.classList.toggle('ready', whisperOverview.runtime.available);
@@ -1527,7 +1527,7 @@ micStream = stream;
         select.appendChild(option);
       }
       const selectionExists = whisperOverview.models.some((model) => model.id === previousSelection);
-      select.value = selectionExists ? previousSelection : 'base.en';
+      select.value = selectionExists ? previousSelection : 'small';
       if (!settings.localWhisper) settings.localWhisper = {};
       settings.localWhisper.modelId = select.value;
       status.textContent = whisperOverview.runtime.available
@@ -1545,23 +1545,66 @@ micStream = stream;
     renderWhisperModelState();
   });
 
-  $('#whisper-download').addEventListener('click', async () => {
-    const model = getSelectedWhisperModel();
-    if (!model) return;
+$('#whisper-download').addEventListener(
+  'click',
+  async () => {
+    cue.log(
+      'whisper download button clicked'
+    );
+
+    const model =
+      getSelectedWhisperModel();
+
+    if (!model) {
+      cue.log(
+        'whisper download aborted: no selected model'
+      );
+
+      $('#whisper-status').textContent =
+        'No Whisper model is selected.';
+
+      return;
+    }
+
+    cue.log(
+      'whisper download requested: ' +
+      model.id
+    );
+
     model.downloading = true;
     renderWhisperModelState();
-    $('#whisper-status').textContent = `Downloading ${model.id}. You can cancel and resume later.`;
+
+    $('#whisper-status').textContent =
+      `Connecting to model server for ${model.id}…`;
+
     try {
-      await cue.whisperModelDownload(model.id);
-      $('#whisper-status').textContent = `${model.id} downloaded and verified.`;
+      await cue.whisperModelDownload(
+        model.id
+      );
+
+      $('#whisper-status').textContent =
+        `${model.id} downloaded and verified.`;
+
     } catch (error) {
-      $('#whisper-status').textContent = error.message.includes('cancelled')
-        ? `${model.id} download paused. Progress was kept.`
-        : `Download failed: ${error.message}`;
+      const message =
+        error?.message ||
+        String(error);
+
+      cue.log(
+        'whisper download failed: ' +
+        message
+      );
+
+      $('#whisper-status').textContent =
+        message.includes('cancelled')
+          ? `${model.id} download paused. Progress was kept.`
+          : `Download failed: ${message}`;
+
     } finally {
       await refreshWhisperModels();
     }
-  });
+  }
+);
 
   $('#whisper-cancel').addEventListener('click', async () => {
     const model = getSelectedWhisperModel();
@@ -1595,19 +1638,59 @@ micStream = stream;
     }
   });
 
-  cue.on('whisper:download-progress', (progress) => {
-    if (!whisperOverview) return;
-    const model = whisperOverview.models.find((candidate) => candidate.id === progress.modelId);
-    if (!model) return;
-    model.partialBytes = progress.receivedBytes;
-    model.downloading = true;
-    if ($('#whisper-model').value === progress.modelId) {
-      $('#whisper-progress-wrap').classList.remove('hidden');
-      $('#whisper-progress').value = progress.percent;
-      $('#whisper-progress-label').textContent = `${progress.percent}%`;
-      $('#whisper-model-detail').textContent = `${formatBytes(progress.receivedBytes)} of ${formatBytes(progress.totalBytes)}`;
+cue.on(
+  'whisper:download-progress',
+  (progress) => {
+    if (!whisperOverview) {
+      return;
     }
-  });
+
+    const model =
+      whisperOverview.models.find(
+        (candidate) =>
+          candidate.id ===
+          progress.modelId
+      );
+
+    if (!model) {
+      return;
+    }
+
+    model.partialBytes =
+      progress.receivedBytes;
+
+    model.downloading = true;
+
+    if (
+      $('#whisper-model').value ===
+      progress.modelId
+    ) {
+      $('#whisper-progress-wrap')
+        .classList
+        .remove('hidden');
+
+      $('#whisper-progress').value =
+        progress.percent;
+
+      $('#whisper-progress-label')
+        .textContent =
+        `${progress.percent}%`;
+
+      if (progress.retrying) {
+        $('#whisper-status').textContent =
+          `Connection interrupted. Retrying download…`;
+      } else {
+        $('#whisper-status').textContent =
+          `Downloading ${progress.modelId}… ${progress.percent}%`;
+      }
+
+      $('#whisper-model-detail')
+        .textContent =
+        `${formatBytes(progress.receivedBytes)} ` +
+        `of ${formatBytes(progress.totalBytes)}`;
+    }
+  }
+);
   cue.on('whisper:models-changed', () => refreshWhisperModels());
 
   async function saveSettings() {

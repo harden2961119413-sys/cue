@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences,net } = require('electron');
 const path = require('path');
 const os = require('os');
 const store = require('./src/store');
@@ -144,13 +144,54 @@ async function startLocalWhisper(settings) {
         runtimeDirectory: runtime.runtimeDirectory,
         modelPath,
         language: model.englishOnly ? 'en' : (localSettings.language || 'auto'),
-        threads: Number(localSettings.threads) || 0,
+        threads:
+  resolveLocalWhisperThreads(
+    localSettings.threads
+  ),
         tinydiarize: model.tinydiarize
       },
       onTranscript: publishTranscript,
       onSpeechState: (channel, speaking, durationMs) => {
         send('vad:state', { channel, speaking, durationMs });
       },
+      onInterim:
+  (channel, text) => {
+    send(
+      'stt:interim',
+      {
+        channel,
+        text
+      }
+    );
+  },
+  onMetrics:
+  (metrics) => {
+    if (
+      metrics.kind ===
+      'dropped-final'
+    ) {
+      console.log(
+        '[local-whisper]',
+        metrics.channel,
+        'OVERLOAD',
+        'dropped final',
+        `audio=${metrics.audioMs}ms`
+      );
+
+      return;
+    }
+
+    console.log(
+      '[local-whisper]',
+      metrics.channel,
+      metrics.kind,
+      `audio=${metrics.audioMs}ms`,
+      `queue=${metrics.queueMs}ms`,
+      `inference=${metrics.inferenceMs}ms`,
+      `rtf=${metrics.rtf.toFixed(2)}`,
+      `pending=${metrics.pending}`
+    );
+  },
       onStatus: (status) => send('stt:status', { provider: 'local', ...status }),
       onError: (error) => {
         sttDisabled = true;
@@ -401,6 +442,45 @@ function stopStreamingSTT() {
 }
 
 // -------- audio routing (streaming or batch) --------
+function resolveLocalWhisperThreads(
+  configured
+) {
+  const explicit =
+    Number.parseInt(
+      configured,
+      10
+    );
+
+  if (
+    Number.isInteger(explicit) &&
+    explicit > 0
+  ) {
+    return Math.min(
+      explicit,
+      64
+    );
+  }
+
+  const logicalCpuCount =
+    Math.max(
+      1,
+      os.cpus()?.length || 1
+    );
+
+  // Leave some CPU for Electron,
+  // Zoom/Teams and the browser.
+  return Math.min(
+    8,
+    Math.max(
+      2,
+      Math.floor(
+        logicalCpuCount *
+        0.75
+      )
+    )
+  );
+}
+
 function routeAudio(channel, pcmBuffer) {
   const buf = Buffer.from(pcmBuffer);
 
@@ -584,12 +664,66 @@ ipcMain.handle('capture:toggle', () => {
 });
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
 ipcMain.handle('whisper:models', () => getWhisperOverview());
-ipcMain.handle('whisper:model-download', async (_event, modelId) => {
-  if (!whisperModelManager) throw new Error('The local Whisper model manager is not ready.');
-  const result = await whisperModelManager.download(modelId, (progress) => send('whisper:download-progress', progress));
-  send('whisper:models-changed', { modelId });
-  return result;
-});
+ipcMain.handle(
+  'whisper:model-download',
+  async (_event, modelId) => {
+    console.log(
+      '[whisper] model download requested:',
+      modelId
+    );
+
+    if (!whisperModelManager) {
+      throw new Error(
+        'The local Whisper model manager is not ready.'
+      );
+    }
+
+    try {
+      const result =
+        await whisperModelManager.download(
+          modelId,
+          (progress) => {
+            console.log(
+              '[whisper] download progress:',
+              modelId,
+              `${progress.percent}%`,
+              progress.receivedBytes,
+              '/',
+              progress.totalBytes
+            );
+
+            send(
+              'whisper:download-progress',
+              progress
+            );
+          }
+        );
+
+      console.log(
+        '[whisper] model download completed:',
+        modelId
+      );
+
+      send(
+        'whisper:models-changed',
+        { modelId }
+      );
+
+      return result;
+
+    } catch (error) {
+      console.error(
+        '[whisper] model download failed:',
+        modelId,
+        error?.stack ||
+        error?.message ||
+        error
+      );
+
+      throw error;
+    }
+  }
+);
 ipcMain.handle('whisper:model-cancel', (_event, modelId) => {
   if (!whisperModelManager) return false;
   return whisperModelManager.cancelDownload(modelId);
@@ -770,8 +904,15 @@ function createPermissionsWindow() {
 // -------- launch (called after permissions are confirmed) --------
 function launchApp() {
   if (isMac && app.dock) app.dock.hide();
+  whisperModelManager = new WhisperModelManager({
+  userDataPath: app.getPath('userData'),
 
-  whisperModelManager = new WhisperModelManager({ userDataPath: app.getPath('userData') });
+  // Use Electron/Chromium's network stack instead of Node's global fetch.
+  // This behaves more consistently with Windows proxy/certificate settings.
+  fetchImpl: (url, options) => {
+    return net.fetch(url, options);
+  }
+});
 
   const allowMedia = (permission) => permission === 'media' || permission === 'microphone' || permission === 'audioCapture' || permission === 'display-capture' || permission === 'screen';
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));

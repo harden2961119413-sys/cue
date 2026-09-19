@@ -1,177 +1,498 @@
-// Voice Activity Detection (VAD) — Adaptive energy-based VAD with speech state machine.
-// This is a lightweight VAD that runs in the main process on the PCM buffers.
-// It provides much better segmentation than a simple RMS gate by tracking
-// speech onset, continuation, and offset with hysteresis.
-//
-// For the renderer side, we integrate @ricky0123/vad-web (Silero VAD via ONNX)
-// which is the gold standard for browser-based VAD. This file handles the
-// server/main-process side.
+// src/vad.js
 
 class AdaptiveVAD {
   constructor(options = {}) {
-    // Configurable thresholds
-    this.sampleRate = options.sampleRate || 16000;
-    this.frameDurationMs = options.frameDurationMs || 30; // 30ms frames
-    this.frameSize = Math.floor(this.sampleRate * this.frameDurationMs / 1000);
+    this.sampleRate =
+      options.sampleRate ?? 16000;
 
-    // Energy thresholds with hysteresis
-    this.onsetThreshold = options.onsetThreshold || 250;   // RMS to trigger speech start
-    this.offsetThreshold = options.offsetThreshold || 150;  // RMS to trigger speech end (lower = hysteresis)
-    this.silenceFrames = options.silenceFrames || 15;       // frames of silence before end (~450ms)
-    this.minSpeechFrames = options.minSpeechFrames || 4;   // minimum frames to count as speech (~120ms)
+    this.frameDurationMs =
+      options.frameDurationMs ?? 30;
 
-    // Adaptive noise floor
-    this.noiseFloor = 80;
-    this.noiseAdaptRate = 0.02;    // how fast noise floor adapts
-    this.noiseMaxAdapt = 400;      // don't adapt above this
+    this.frameSize =
+      Math.floor(
+        this.sampleRate *
+        this.frameDurationMs /
+        1000
+      );
 
-    // State machine
-    this.state = 'silence'; // 'silence' | 'speech' | 'trailing'
-    this.speechFrameCount = 0;
+    this.frameBytes =
+      this.frameSize * 2;
+
+    // Keep generic defaults conservative.
+    // Local Whisper overrides these per channel.
+    this.onsetThreshold =
+      options.onsetThreshold ?? 250;
+
+    this.offsetThreshold =
+      options.offsetThreshold ?? 150;
+
+    this.silenceFrames =
+      options.silenceFrames ?? 15;
+
+    this.minSpeechFrames =
+      Math.max(
+        1,
+        options.minSpeechFrames ?? 4
+      );
+
+    this.initialNoiseFloor =
+      options.initialNoiseFloor ?? 80;
+
+    this.noiseFloor =
+      this.initialNoiseFloor;
+
+    this.noiseAdaptRate =
+      options.noiseAdaptRate ?? 0.02;
+
+    this.noiseMaxAdapt =
+      options.noiseMaxAdapt ?? 400;
+
+    this.onSpeechStart =
+      options.onSpeechStart ||
+      (() => {});
+
+    this.onSpeechEnd =
+      options.onSpeechEnd ||
+      (() => {});
+
+    this.onVADState =
+      options.onVADState ||
+      (() => {});
+
+    this.state = 'silence';
+
+    this.candidateFrames = 0;
+    this.speechFrames = 0;
     this.silenceFrameCount = 0;
-    this.totalSpeechFrames = 0;
 
-    // Callbacks
-    this.onSpeechStart = options.onSpeechStart || (() => {});
-    this.onSpeechEnd = options.onSpeechEnd || (() => {});
-    this.onVADState = options.onVADState || (() => {});
+    // Preserve incomplete 30 ms frames
+    // across AudioWorklet chunks.
+    this.pendingBytes =
+      Buffer.alloc(0);
   }
 
-  // Process a chunk of Int16 PCM audio
   processChunk(pcmBuffer) {
-    const samples = pcmBuffer.length / 2;
+    const chunk =
+      Buffer.from(pcmBuffer || []);
+
+    if (!chunk.length) {
+      return;
+    }
+
+    if (chunk.length % 2 !== 0) {
+      throw new Error(
+        'VAD PCM must contain complete Int16 samples.'
+      );
+    }
+
+    const input =
+      this.pendingBytes.length
+        ? Buffer.concat([
+            this.pendingBytes,
+            chunk
+          ])
+        : chunk;
+
     let offset = 0;
 
-    while (offset + this.frameSize * 2 <= pcmBuffer.length) {
-      const frame = pcmBuffer.slice(offset, offset + this.frameSize * 2);
-      const energy = this._computeRMS(frame);
-      this._processFrame(energy);
-      offset += this.frameSize * 2;
+    while (
+      offset + this.frameBytes <=
+      input.length
+    ) {
+      const frame =
+        input.subarray(
+          offset,
+          offset + this.frameBytes
+        );
+
+      const energy =
+        this._computeRMS(frame);
+
+      this._processFrame(
+        energy
+      );
+
+      offset += this.frameBytes;
     }
+
+    this.pendingBytes =
+      Buffer.from(
+        input.subarray(offset)
+      );
   }
 
   _computeRMS(frame) {
     let sum = 0;
-    const n = frame.length / 2;
-    for (let i = 0; i < frame.length; i += 2) {
-      const s = frame.readInt16LE(i);
-      sum += s * s;
+
+    const count =
+      frame.length / 2;
+
+    for (
+      let offset = 0;
+      offset < frame.length;
+      offset += 2
+    ) {
+      const sample =
+        frame.readInt16LE(offset);
+
+      sum += sample * sample;
     }
-    return Math.sqrt(sum / n);
+
+    return Math.sqrt(
+      sum /
+      Math.max(
+        1,
+        count
+      )
+    );
+  }
+
+  _adaptNoiseFloor(energy) {
+    if (
+      energy >=
+      this.noiseMaxAdapt
+    ) {
+      return;
+    }
+
+    this.noiseFloor =
+      this.noiseFloor *
+        (
+          1 -
+          this.noiseAdaptRate
+        ) +
+      energy *
+        this.noiseAdaptRate;
+  }
+
+  _getThresholds() {
+    return {
+      onset:
+        Math.max(
+          this.onsetThreshold,
+          this.noiseFloor * 2.0
+        ),
+
+      offset:
+        Math.max(
+          this.offsetThreshold,
+          this.noiseFloor * 1.3
+        )
+    };
+  }
+
+  _confirmSpeech() {
+    this.state = 'speech';
+
+    this.speechFrames =
+      this.candidateFrames;
+
+    this.candidateFrames = 0;
+
+    this.silenceFrameCount = 0;
+
+    this.onSpeechStart();
+
+    this.onVADState(
+      'speech'
+    );
   }
 
   _processFrame(energy) {
-    // Adapt noise floor during silence
-    if (this.state === 'silence') {
-      if (energy < this.noiseMaxAdapt) {
-        this.noiseFloor = this.noiseFloor * (1 - this.noiseAdaptRate) + energy * this.noiseAdaptRate;
-      }
-    }
-
-    // Dynamic thresholds based on noise floor
-    const dynamicOnset = Math.max(this.onsetThreshold, this.noiseFloor * 2.5);
-    const dynamicOffset = Math.max(this.offsetThreshold, this.noiseFloor * 1.5);
-
-    const isSpeech = energy > dynamicOnset;
-    const isSilence = energy < dynamicOffset;
+    const {
+      onset,
+      offset
+    } =
+      this._getThresholds();
 
     switch (this.state) {
-      case 'silence':
-        if (isSpeech) {
-          this.speechFrameCount = 1;
-          this.state = 'speech';
-          this.onSpeechStart();
-          this.onVADState('speech');
-        }
-        break;
+      case 'silence': {
+        this._adaptNoiseFloor(
+          energy
+        );
 
-      case 'speech':
-        if (isSpeech) {
-          this.speechFrameCount++;
-          this.totalSpeechFrames++;
-        } else if (isSilence) {
-          this.silenceFrameCount = 1;
-          this.state = 'trailing';
-        }
-        break;
+        if (
+          energy >= onset
+        ) {
+          this.state =
+            'candidate';
 
-      case 'trailing':
-        if (isSpeech) {
-          // Speech resumed — reset silence counter
-          this.silenceFrameCount = 0;
-          this.speechFrameCount++;
-          this.state = 'speech';
-        } else {
-          this.silenceFrameCount++;
-          if (this.silenceFrameCount >= this.silenceFrames) {
-            // Confirmed end of speech
-            const wasSpeech = this.speechFrameCount >= this.minSpeechFrames;
-            if (wasSpeech) {
-              this.onSpeechEnd(this.speechFrameCount * this.frameDurationMs);
-            }
-            this.state = 'silence';
-            this.speechFrameCount = 0;
-            this.silenceFrameCount = 0;
-            this.onVADState('silence');
+          this.candidateFrames =
+            1;
+
+          if (
+            this.minSpeechFrames ===
+            1
+          ) {
+            this._confirmSpeech();
           }
         }
+
         break;
+      }
+
+      case 'candidate': {
+        // Candidate must be consecutive
+        // strong speech.
+        if (
+          energy >= onset
+        ) {
+          this.candidateFrames +=
+            1;
+
+          if (
+            this.candidateFrames >=
+            this.minSpeechFrames
+          ) {
+            this._confirmSpeech();
+          }
+
+        } else {
+          // False positive:
+          // click, notification,
+          // short burst, etc.
+          this.state =
+            'silence';
+
+          this.candidateFrames =
+            0;
+
+          this._adaptNoiseFloor(
+            energy
+          );
+        }
+
+        break;
+      }
+
+      case 'speech': {
+        // Hysteresis:
+        //
+        // onset = threshold to ENTER speech
+        // offset = lower threshold to STAY in speech
+        if (
+          energy >= offset
+        ) {
+          this.speechFrames += 1;
+          this.silenceFrameCount = 0;
+
+        } else {
+          this.state =
+            'trailing';
+
+          this.silenceFrameCount =
+            1;
+        }
+
+        break;
+      }
+
+      case 'trailing': {
+        if (
+          energy >= offset
+        ) {
+          // Speech resumed.
+          this.state =
+            'speech';
+
+          this.speechFrames +=
+            1;
+
+          this.silenceFrameCount =
+            0;
+
+        } else {
+          this.silenceFrameCount +=
+            1;
+
+          if (
+            this.silenceFrameCount >=
+            this.silenceFrames
+          ) {
+            const durationMs =
+              this.speechFrames *
+              this.frameDurationMs;
+
+            this.state =
+              'silence';
+
+            this.candidateFrames =
+              0;
+
+            this.speechFrames =
+              0;
+
+            this.silenceFrameCount =
+              0;
+
+            this.onSpeechEnd(
+              durationMs
+            );
+
+            this.onVADState(
+              'silence'
+            );
+          }
+        }
+
+        break;
+      }
     }
   }
 
-  // Get current state info
   getState() {
     return {
-      state: this.state,
-      isSpeaking: this.state !== 'silence',
-      noiseFloor: Math.round(this.noiseFloor),
-      speechDurationMs: this.speechFrameCount * this.frameDurationMs
+      state:
+        this.state,
+
+      isSpeaking:
+        this.state === 'speech' ||
+        this.state === 'trailing',
+
+      noiseFloor:
+        Math.round(
+          this.noiseFloor
+        ),
+
+      speechDurationMs:
+        this.speechFrames *
+        this.frameDurationMs
     };
   }
 
   reset() {
-    this.state = 'silence';
-    this.speechFrameCount = 0;
-    this.silenceFrameCount = 0;
-    this.totalSpeechFrames = 0;
-    this.noiseFloor = 80;
+    this.state =
+      'silence';
+
+    this.candidateFrames =
+      0;
+
+    this.speechFrames =
+      0;
+
+    this.silenceFrameCount =
+      0;
+
+    this.noiseFloor =
+      this.initialNoiseFloor;
+
+    this.pendingBytes =
+      Buffer.alloc(0);
   }
 }
 
-// Ring buffer for keeping pre-speech audio (so we don't lose the first word)
+
 class AudioRingBuffer {
-  constructor(durationMs, sampleRate = 16000) {
-    this.capacity = Math.floor(sampleRate * 2 * durationMs / 1000); // bytes
-    this.buffer = Buffer.alloc(this.capacity);
+  constructor(
+    durationMs,
+    sampleRate = 16000
+  ) {
+    this.capacity =
+      Math.floor(
+        sampleRate *
+        2 *
+        durationMs /
+        1000
+      );
+
+    this.buffer =
+      Buffer.alloc(
+        this.capacity
+      );
+
     this.writePos = 0;
     this.filled = false;
   }
 
   write(pcm) {
-    if (pcm.length >= this.capacity) {
-      pcm.copy(this.buffer, 0, pcm.length - this.capacity);
-      this.writePos = 0;
-      this.filled = true;
+    const input =
+      Buffer.from(pcm || []);
+
+    if (!input.length) {
       return;
     }
-    const space = this.capacity - this.writePos;
-    if (pcm.length <= space) {
-      pcm.copy(this.buffer, this.writePos);
-      this.writePos += pcm.length;
-    } else {
-      pcm.copy(this.buffer, this.writePos, 0, space);
-      pcm.copy(this.buffer, 0, space);
-      this.writePos = pcm.length - space;
+
+    if (
+      input.length >=
+      this.capacity
+    ) {
+      input.copy(
+        this.buffer,
+        0,
+        input.length -
+          this.capacity
+      );
+
+      this.writePos = 0;
       this.filled = true;
+
+      return;
     }
+
+    const space =
+      this.capacity -
+      this.writePos;
+
+    if (
+      input.length <=
+      space
+    ) {
+      input.copy(
+        this.buffer,
+        this.writePos
+      );
+
+      this.writePos +=
+        input.length;
+
+      if (
+        this.writePos ===
+        this.capacity
+      ) {
+        this.writePos = 0;
+        this.filled = true;
+      }
+
+      return;
+    }
+
+    input.copy(
+      this.buffer,
+      this.writePos,
+      0,
+      space
+    );
+
+    input.copy(
+      this.buffer,
+      0,
+      space
+    );
+
+    this.writePos =
+      input.length -
+      space;
+
+    this.filled = true;
   }
 
-  // Get all buffered audio in order
   read() {
-    if (!this.filled) return this.buffer.slice(0, this.writePos);
+    if (!this.filled) {
+      return this.buffer.subarray(
+        0,
+        this.writePos
+      );
+    }
+
     return Buffer.concat([
-      this.buffer.slice(this.writePos),
-      this.buffer.slice(0, this.writePos)
+      this.buffer.subarray(
+        this.writePos
+      ),
+
+      this.buffer.subarray(
+        0,
+        this.writePos
+      )
     ]);
   }
 
@@ -181,4 +502,8 @@ class AudioRingBuffer {
   }
 }
 
-module.exports = { AdaptiveVAD, AudioRingBuffer };
+
+module.exports = {
+  AdaptiveVAD,
+  AudioRingBuffer
+};
